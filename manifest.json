@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "O'Reilly Audiobook Tracker",
+  "version": "1.0",
+  "permissions": [
+    "storage",
+    "activeTab" 
+  ],
+  "action": {
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.oreilly.com/*"], 
+      "js": ["storage.js","content.js"]
+    }
+  ]
+}
