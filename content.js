@@ -252,18 +252,6 @@ if (isSearchPage()) {
     addMarkCompleteButtons();
 }
 
-// Add event listener for URL changes (for single-page applications)
-let lastUrl = location.href; 
-new MutationObserver(() => {
-    const url = location.href;
-    if (url !== lastUrl) {
-        lastUrl = url;
-        if (isSearchPage()) {
-            addMarkCompleteButtons();
-        }
-    }
-}).observe(document, {subtree: true, childList: true});
-
 // Add debounce utility
 function debounce(func, wait) {
     let timeout;
@@ -300,3 +288,484 @@ function createButton(text, marginLeft = '10px') {
     button.style.marginLeft = marginLeft;
     return button;
 }
+
+// Observer Pattern Implementation
+class Subject {
+    constructor() {
+        this.observers = new Set();
+    }
+
+    attach(observer) {
+        this.observers.add(observer);
+    }
+
+    detach(observer) {
+        this.observers.delete(observer);
+    }
+
+    notify(data) {
+        this.observers.forEach(observer => observer.update(data));
+    }
+}
+
+// Repository Pattern Implementation
+class BookRepository {
+    constructor() {
+        this.listeners = new Set();
+    }
+
+    addListener(listener) {
+        this.listeners.add(listener);
+    }
+
+    removeListener(listener) {
+        this.listeners.delete(listener);
+    }
+
+    notifyListeners(books) {
+        this.listeners.forEach(listener => listener(books));
+    }
+
+    async getCompletedBooks() {
+        return new Promise((resolve) => {
+            chrome.storage.local.get(['completedBooks'], (result) => {
+                resolve(result.completedBooks || []);
+            });
+        });
+    }
+
+    async addCompletedBook(bookTitle) {
+        const completedBooks = await this.getCompletedBooks();
+        if (!completedBooks.includes(bookTitle)) {
+            const updatedBooks = [...completedBooks, bookTitle];
+            await this.saveCompletedBooks(updatedBooks);
+            return updatedBooks;
+        }
+        return completedBooks;
+    }
+
+    async removeCompletedBook(bookTitle) {
+        const completedBooks = await this.getCompletedBooks();
+        const updatedBooks = completedBooks.filter(book => book !== bookTitle);
+        await this.saveCompletedBooks(updatedBooks);
+        return updatedBooks;
+    }
+
+    async saveCompletedBooks(books) {
+        return new Promise((resolve) => {
+            chrome.storage.local.set({ 'completedBooks': books }, () => {
+                this.notifyListeners(books);
+                resolve(books);
+            });
+        });
+    }
+}
+
+// Modify UIStateManager to use Repository
+class UIStateManager extends Subject {
+    constructor(bookRepository) {
+        super();
+        this.completedBooks = new Set();
+        this.bookRepository = bookRepository;
+        
+        // Initialize from repository
+        this.bookRepository.getCompletedBooks().then(books => {
+            this.updateCompletedBooks(books);
+        });
+
+        // Listen for repository changes
+        this.bookRepository.addListener(books => {
+            this.updateCompletedBooks(books);
+        });
+    }
+
+    async updateCompletedBooks(books) {
+        this.completedBooks = new Set(books);
+        this.notify({
+            type: 'BOOKS_UPDATED',
+            books: Array.from(this.completedBooks)
+        });
+    }
+
+    async addCompletedBook(bookTitle) {
+        const updatedBooks = await this.bookRepository.addCompletedBook(bookTitle);
+        this.updateCompletedBooks(updatedBooks);
+    }
+
+    async removeCompletedBook(bookTitle) {
+        const updatedBooks = await this.bookRepository.removeCompletedBook(bookTitle);
+        this.updateCompletedBooks(updatedBooks);
+    }
+
+    isBookCompleted(bookTitle) {
+        return this.completedBooks.has(bookTitle);
+    }
+}
+
+// Book State with Observer Pattern
+class BookState {
+    constructor(book, uiStateManager) {
+        this.book = book;
+        this.uiStateManager = uiStateManager;
+    }
+
+    enter() {}
+    exit() {}
+    markComplete() {}
+    removeComplete() {}
+}
+
+// Modify Book States to handle async operations
+class IncompleteState extends BookState {
+    async markComplete() {
+        await this.uiStateManager.addCompletedBook(this.book.title);
+        this.book.setState(new CompleteState(this.book, this.uiStateManager));
+    }
+}
+
+class CompleteState extends BookState {
+    async removeComplete() {
+        await this.uiStateManager.removeCompletedBook(this.book.title);
+        this.book.setState(new IncompleteState(this.book, this.uiStateManager));
+    }
+}
+
+// Book Model as Observer
+class Book {
+    constructor(element, parentArticle, title, buttons, uiStateManager) {
+        this.element = element;
+        this.parentArticle = parentArticle;
+        this.title = title;
+        this.buttons = buttons;
+        this.uiStateManager = uiStateManager;
+        this.state = null;
+    }
+
+    setState(state) {
+        if (this.state) {
+            this.state.exit();
+        }
+        this.state = state;
+        this.state.enter();
+    }
+
+    updateVisualState({ elementColor, backgroundColor, markCompleteDisabled, removeCompleteDisabled }) {
+        this.element.style.color = elementColor;
+        this.parentArticle.style.backgroundColor = backgroundColor;
+        this.buttons.markComplete.disabled = markCompleteDisabled;
+        this.buttons.removeComplete.disabled = removeCompleteDisabled;
+    }
+
+    markComplete() {
+        this.state.markComplete();
+    }
+
+    removeComplete() {
+        this.state.removeComplete();
+    }
+}
+
+// View Components
+class View {
+    createElement(tag, attributes = {}, styles = {}) {
+        const element = document.createElement(tag);
+        Object.assign(element, attributes);
+        Object.assign(element.style, styles);
+        return element;
+    }
+}
+
+class BookListView extends View {
+    constructor(uiStateManager) {
+        super();
+        this.container = null;
+        this.list = null;
+        this.init();
+        uiStateManager.attach(this);
+    }
+
+    init() {
+        this.createContainer();
+        this.createList();
+        this.attachToDOM();
+    }
+
+    createContainer() {
+        this.container = this.createElement('div', 
+            { id: 'progress-indicator' },
+            {
+                position: 'fixed',
+                right: '0',
+                top: '0',
+                height: '100vh',
+                width: '300px',
+                backgroundColor: '#f9f9f9',
+                borderLeft: '1px solid #ccc',
+                padding: '20px',
+                boxShadow: '-2px 0 5px rgba(0, 0, 0, 0.1)',
+                overflowY: 'auto',
+                zIndex: '1000'
+            }
+        );
+
+        const header = this.createHeader();
+        const collapseButton = this.createCollapseButton();
+
+        this.container.appendChild(collapseButton);
+        this.container.appendChild(header);
+    }
+
+    createHeader() {
+        return this.createElement('h3',
+            { textContent: 'Completed Books' },
+            {
+                margin: '0 0 20px',
+                fontWeight: 'bold',
+                borderBottom: '2px solid #333',
+                paddingBottom: '10px'
+            }
+        );
+    }
+
+    createCollapseButton() {
+        const button = this.createElement('button',
+            { textContent: '>' },
+            {
+                position: 'absolute',
+                left: '-20px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                backgroundColor: '#f9f9f9',
+                border: '1px solid #ccc',
+                borderRight: 'none',
+                padding: '10px 5px',
+                cursor: 'pointer',
+                borderRadius: '5px 0 0 5px'
+            }
+        );
+
+        let isCollapsed = false;
+        button.addEventListener('click', () => this.handleCollapse(button, isCollapsed));
+        return button;
+    }
+
+    handleCollapse(button, isCollapsed) {
+        if (isCollapsed) {
+            this.container.style.transform = 'translateX(0)';
+            button.textContent = '>';
+        } else {
+            this.container.style.transform = 'translateX(300px)';
+            button.textContent = '<';
+        }
+        isCollapsed = !isCollapsed;
+    }
+
+    createList() {
+        this.list = this.createElement('ul',
+            { id: 'completed-books-list' },
+            {
+                listStyleType: 'none',
+                padding: '0',
+                margin: '0'
+            }
+        );
+        this.container.appendChild(this.list);
+    }
+
+    attachToDOM() {
+        document.body.style.marginRight = '300px';
+        document.body.appendChild(this.container);
+    }
+
+    update(data) {
+        if (['BOOKS_UPDATED', 'BOOK_COMPLETED', 'BOOK_UNCOMPLETED'].includes(data.type)) {
+            this.updateBookList(data.books);
+        }
+    }
+
+    updateBookList(books) {
+        if (!this.list) return;
+        this.list.innerHTML = '';
+        books.length === 0 ? this.addEmptyMessage() : books.forEach(book => this.addBookItem(book));
+    }
+
+    addEmptyMessage() {
+        const message = this.createElement('li',
+            { textContent: 'No books completed yet.' },
+            {
+                padding: '10px',
+                borderBottom: '1px solid #ddd',
+                color: '#666'
+            }
+        );
+        this.list.appendChild(message);
+    }
+
+    addBookItem(bookTitle) {
+        const item = this.createElement('li',
+            { textContent: bookTitle },
+            {
+                padding: '10px',
+                borderBottom: '1px solid #ddd',
+                transition: 'background-color 0.2s'
+            }
+        );
+        
+        item.addEventListener('mouseover', () => item.style.backgroundColor = '#eee');
+        item.addEventListener('mouseout', () => item.style.backgroundColor = 'transparent');
+        
+        this.list.appendChild(item);
+    }
+}
+
+class BookItemView extends View {
+    constructor(book, handlers) {
+        super();
+        this.book = book;
+        this.handlers = handlers;
+        this.element = null;
+        this.buttons = null;
+    }
+
+    render() {
+        this.buttons = this.createButtons();
+        return this.buttons;
+    }
+
+    createButtons() {
+        return {
+            markComplete: this.createElement('button', {
+                textContent: 'Mark Complete',
+                onclick: () => this.handlers.onMarkComplete(this.book),
+                style: { marginLeft: '10px' }
+            }),
+            removeComplete: this.createElement('button', {
+                textContent: 'Remove Complete',
+                onclick: () => this.handlers.onRemoveComplete(this.book),
+                style: { marginLeft: '10px' }
+            })
+        };
+    }
+
+    updateState({ elementColor, backgroundColor, markCompleteDisabled, removeCompleteDisabled }) {
+        this.book.element.style.color = elementColor;
+        this.book.parentArticle.style.backgroundColor = backgroundColor;
+        this.buttons.markComplete.disabled = markCompleteDisabled;
+        this.buttons.removeComplete.disabled = removeCompleteDisabled;
+    }
+}
+
+// Modify BookController to use the new view components
+class BookController {
+    constructor() {
+        this.bookRepository = new BookRepository();
+        this.uiStateManager = new UIStateManager(this.bookRepository);
+        this.bookListView = null;
+        this.processedAttribute = 'data-processed';
+        this.books = new Map();
+    }
+
+    async init() {
+        if (this.isSearchPage()) {
+            this.bookListView = new BookListView(this.uiStateManager);
+            this.setupMutationObserver();
+            await this.initializeBooks();
+            this.processBooks();
+        }
+    }
+
+    processBookElement(element, completedBooks) {
+        if (element.hasAttribute(this.processedAttribute)) return;
+        element.setAttribute(this.processedAttribute, 'true');
+
+        const book = this.createBookModel(element);
+        const bookItemView = new BookItemView(book, {
+            onMarkComplete: (book) => book.markComplete(),
+            onRemoveComplete: (book) => book.removeComplete()
+        });
+
+        const buttons = bookItemView.render();
+        element.parentNode.appendChild(buttons.markComplete);
+        element.parentNode.appendChild(buttons.removeComplete);
+
+        const initialState = this.uiStateManager.isBookCompleted(book.title)
+            ? new CompleteState(book, this.uiStateManager)
+            : new IncompleteState(book, this.uiStateManager);
+        
+        book.setState(initialState);
+        this.books.set(book.title, book);
+    }
+
+    createBookModel(element) {
+        return new Book(
+            element,
+            element.closest('article'),
+            element.textContent,
+            null,
+            this.uiStateManager
+        );
+    }
+
+    setupMutationObserver() {
+        const targetNode = document.getElementById('main');
+        if (targetNode) {
+            const observer = new MutationObserver(
+                debounce((mutationsList) => {
+                    for (const mutation of mutationsList) {
+                        if (mutation.type === 'childList') {
+                            this.processBooks();
+                        }
+                    }
+                }, 250)
+            );
+            observer.observe(targetNode, { childList: true, subtree: true });
+        }
+    }
+
+    async initializeBooks() {
+        const completedBooks = await this.bookRepository.getCompletedBooks();
+        this.uiStateManager.updateCompletedBooks(completedBooks);
+    }
+
+    async processBooks() {
+        if (!this.isSearchPage()) return;
+
+        const completedBooks = await this.bookRepository.getCompletedBooks();
+        const audiobookElements = this.getAudiobookElements();
+        audiobookElements.forEach(element => this.processBookElement(element, completedBooks));
+    }
+
+    getAudiobookElements() {
+        const selector = 'a.MuiTypography-root.MuiTypography-link.css-wo4lto';
+        return Array.from(document.querySelectorAll(selector))
+            .filter(el => {
+                return el.children.length === 0 &&
+                       el.childNodes.length === 1 &&
+                       el.childNodes[0].nodeType === Node.TEXT_NODE &&
+                       el.parentElement?.tagName === 'H3' &&
+                       el.parentElement?.classList.contains('MuiTypography-root') &&
+                       el.parentElement?.classList.contains('MuiTypography-h3') &&
+                       el.parentElement?.classList.contains('css-pc8fuj') &&
+                       el.parentElement?.children.length === 1;
+            });
+    }
+
+    isSearchPage() {
+        return window.location.href.includes('/search/');
+    }
+}
+
+// Initialize the application with repository
+const bookRepository = new BookRepository();
+const bookController = new BookController();
+bookController.init().catch(console.error);
+
+// URL change detection for SPA
+let lastUrl = location.href;
+new MutationObserver(() => {
+    const url = location.href;
+    if (url !== lastUrl) {
+        lastUrl = url;
+        bookController.init().catch(console.error);
+    }
+}).observe(document, {subtree: true, childList: true});
