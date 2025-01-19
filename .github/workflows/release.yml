@@ -16,19 +16,21 @@ jobs:
       
       - name: Create Chrome Extension ZIP
         run: |
+          cd $(git rev-parse --show-toplevel)
           zip -r chrome-extension.zip \
             manifest.json \
             content.js \
             storage.js \
-            icons/
+            icons/*
 
       - name: Create Firefox Extension ZIP
         run: |
+          cd $(git rev-parse --show-toplevel)
           zip -r firefox-extension.zip \
             manifest.json \
             content.js \
             storage.js \
-            icons/
+            icons/*
 
       - name: Release
         uses: softprops/action-gh-release@v1
