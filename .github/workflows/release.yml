@@ -1,0 +1,59 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Create Chrome Extension ZIP
+        run: |
+          zip -r chrome-extension.zip \
+            manifest.json \
+            content.js \
+            storage.js \
+            icons/
+
+      - name: Create Firefox Extension ZIP
+        run: |
+          zip -r firefox-extension.zip \
+            manifest.json \
+            content.js \
+            storage.js \
+            icons/
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Chrome Extension
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./chrome-extension.zip
+          asset_name: chrome-extension.zip
+          asset_content_type: application/zip
+
+      - name: Upload Firefox Extension
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./firefox-extension.zip
+          asset_name: firefox-extension.zip
+          asset_content_type: application/zip 
